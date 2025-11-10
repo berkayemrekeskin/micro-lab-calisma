@@ -1,0 +1,116 @@
+; -----------------------------------------------------------------------------
+; MSP430 Assembly - 4-Digit Scrolling 7-Segment Display (Common Anode)
+; Shows a smooth left scroll of numbers 0-9 across D0-D3 (P2.0–P2.3).
+; Example sequence: ---0, --01, -012, 0123, 1234, 2345, 3456, 4567, 5678, 6789,
+;                    7890, 8901, 9012, 0123, ...
+;
+; Hardware:
+;   - P1.0–P1.7: Segment data
+;   - P2.0–P2.3: Display enables (Active Low)
+; -----------------------------------------------------------------------------
+
+            .text
+            .global _start
+
+_start:
+; --- Stack and Watchdog Initialization ---
+    mov.w   #0280h, SP
+    mov.w   #WDTPW|WDTHOLD, &WDTCTL         ; Stop watchdog timer
+
+; --- Port Initialization ---
+    bis.b   #0FFh, &P1DIR                   ; P1.0–P1.7 as output
+    bic.b   #0FFh, &P1OUT                   ; Segments OFF (all low)
+
+    bis.b   #0Fh, &P2DIR                    ; P2.0–P2.3 as output
+    bis.b   #0Fh, &P2OUT                    ; Disable all digits (active low)
+
+; --- Setup Counter Registers ---
+    mov.w   #0, R5                          ; R5 = scroll start index (0–9)
+
+; -----------------------------------------------------------------------------
+; Main Program Loop
+; -----------------------------------------------------------------------------
+MainLoop:
+    ; Refresh each scroll frame for about 1 second total
+    mov.w   #200, R12                       ; R12 = frame refresh repetitions
+FrameLoop:
+        mov.w   #0, R8                      ; R8 = display index (0–3)
+DisplayCycle:
+        mov.w   R5, R9                      ; base index = current scroll start
+        add.w   R8, R9                      ; add display offset (R5+R8)
+        cmp.w   #10, R9
+        jl      NoWrap
+        sub.w   #10, R9                     ; wrap around after 9 -> 0
+NoWrap:
+        mov.w   #arr, R6
+        add.w   R9, R6
+        mov.b   @R6, R7                     ; R7 = 7-segment pattern
+        mov.b   R7, &P1OUT                  ; Output pattern to segments
+
+        ; Enable one display (active low)
+        call    #EnableDisplay
+
+        ; Short visible time
+        call    #DelayShort
+
+        ; Turn off all displays
+        call    #DisableAllDisplays
+
+        inc.w   R8
+        cmp.w   #4, R8
+        jl      DisplayCycle
+
+        dec.w   R12
+        jnz     FrameLoop
+
+    ; Move to next scroll frame
+    inc.w   R5
+    cmp.w   #10, R5
+    jl      MainLoop
+    clr.w   R5
+    jmp     MainLoop
+
+; -----------------------------------------------------------------------------
+; Subroutines
+; -----------------------------------------------------------------------------
+
+; EnableDisplay: enable D0–D3 based on R8 (active low)
+EnableDisplay:
+    mov.b   #0Fh, &P2OUT                    ; disable all first
+    mov.b   #1, R10                         ; bitmask = 0001b
+EnableLoop:
+    cmp.w   #0, R8
+    jeq     EnableDone
+    rla.b   R10                             ; shift left R8 times
+    dec.w   R8
+    jmp     EnableLoop
+EnableDone:
+    bic.b   R10, &P2OUT                     ; make that bit low (enable)
+    ret
+; Disable all displays
+DisableAllDisplays:
+    bis.b   #0Fh, &P2OUT
+    ret
+
+; Short delay for multiplexing (adjust for brightness/flicker)
+DelayShort:
+    mov.w   #0800h, R15
+DshortLoop:
+    dec.w   R15
+    jnz     DshortLoop
+    ret
+
+; -----------------------------------------------------------------------------
+; Data Section
+; -----------------------------------------------------------------------------
+            .data
+arr:
+    ; HGFEDCBA patterns for 0–9 (active high; invert if needed)
+    .byte 00111111b, 00000110b, 01011011b, 01001111b, 01100110b
+    .byte 01101101b, 01111100b, 00000111b, 01111111b, 01100111b
+
+; -----------------------------------------------------------------------------
+; Interrupt Vectors
+; -----------------------------------------------------------------------------
+            .sect ".reset"
+            .short _start

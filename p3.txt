@@ -1,0 +1,140 @@
+; -----------------------------------------------------------------------------
+; MSP430 Assembly - Experiment 4, Part 4: INTERRUPTS - PAUSE/RESET
+; Displays 0-9 repeatedly. P2.6 button toggles Pause/Unpause (1-4 presses)
+; and Resets the counter to 0 (5th press).
+; Uses P1.0-P1.7 for segment data and P2.0-P2.3 for display selection (D0 enable).
+; Assumes a COMMON ANODE display setup (0 = ON, 1 = OFF).
+; -----------------------------------------------------------------------------
+
+            .text                           ; Start of program code
+            .global _start
+_start:
+; --- Stack and Watchdog Initialization ---
+    mov.w   #0280h, SP                      ; Initialize Stack Pointer
+    mov.w   #WDTPW|WDTHOLD, &WDTCTL         ; Stop watchdog timer
+
+; --- Port and Interrupt Initialization ---
+; P1.0-P1.7: Segment Data (Output)
+    bis.b   #0FFh, &P1DIR                   ; Set all P1 pins as output
+    bic.b   #0FFh, &P1OUT                   ; Clear all P1OUT (start with segments OFF)
+
+; P2.0-P2.3: Display Enable/Selection (Output)
+    bis.b   #0Fh, &P2DIR                    ; Set P2.0-P2.3 as output
+    bis.b   #0Fh, &P2OUT                    ; Set P2.0-P2.3 to 1 (disables all 4 displays)
+
+; --- P2.6 Interrupt Setup (Standard Code from Experiment Doc) ---
+    bis.b   #040h, &P2IE                    ; P2.6 enable interrupt (040h = BIT6)
+    and.b   #0BFh, &P2SEL                   ; set 0 P2SEL.6 (0BFh = ~BIT6)
+    and.b   #0BFh, &P2SEL2                  ; set 0 P2SEL2.6 (0BFh = ~BIT6) ; Configure P2.6 as GPIO interrupt pin
+    bis.b   #040h, &P2IES                   ; high to low interrupt mode
+    clr     &P2IFG                          ; clear the flag
+    eint                                    ; enable global interrupts
+
+; --- Setup Counter Registers and Initial Data Pointer ---
+    mov.w   #0, R5                          ; R5: Counter variable (index 0-9)
+    mov.w   #arr_0_9, R6                    ; R6: Pointer to the start of the 0-9 data array
+    
+; --- Main Program Loop ---
+MainLoop:
+; 1. Load the 7-Segment pattern
+    mov.w   R5, R9                          ; R9 = Index R5
+    add.w   R9, R6                          ; R6 = arr_0_9 + R5 (Ensure R6 is correctly indexed before display)
+    mov.b   @R6, R7                         ; R7 holds the 7-segment pattern.
+
+; 2. Output the pattern and enable D0
+    mov.b   R7, &P1OUT                      ; Display the pattern on the segments
+    bic.b   #01h, &P2OUT                    ; Enable D0 (P2.0 = 0)
+    bis.b   #0Eh, &P2OUT                    ; Disable D1, D2, D3
+
+; 3. Call the Delay Subroutine (1 second display time)
+    call    #Delay
+
+; 4. Disable the Display and Clear Segments after delay
+    bis.b   #01h, &P2OUT                    ; Disable D0 (P2.0 = 1)
+    bic.b   #0FFh, &P1OUT                   ; Clear P1OUT (segments off)
+
+; 5. Check Paused Flag and conditionally increment counter
+    mov.w   &PausedFlag, R8
+    cmp.w   #1, R8                          ; Check if PausedFlag == 1
+    jeq     Check_Loop                      ; If paused, skip increment
+    
+; Increment if running
+    inc.w   R5                              ; R5++ (next digit index)
+    ; NOTE: R6 pointer is calculated dynamically at the start of the loop (R6 = arr_0_9 + R5), 
+    ; so we only need to increment R5. We will leave the redundant inc.w R6 for completeness
+    ; based on Part 1/2 logic, but it's not strictly needed here since R6 is reset above.
+    ; For robust code, we skip R6 increment and recalculate R6 in the loop start.
+
+Check_Loop:
+; Check if R5 reached 10 (the end of the 0-9 sequence)
+    cmp.w   #10, R5                         ; Compare R5 with 10
+    jne     MainLoop                        ; If not 10, repeat loop
+    
+; If 10, Reset R5 to start over (0)
+    clr.w   R5                              ; R5 = 0
+    jmp     MainLoop                        ; Restart the MainLoop
+
+; -----------------------------------------------------------------------------
+; DELAY SUBROUTINE (Unchanged)
+; -----------------------------------------------------------------------------
+Delay:
+    mov.w #0Ah, R14     ; Initialize Outer loop counter (R14) to 10.
+L2:
+    mov.w #07A00h, R15  ; Initialize Inner loop counter (R15) to 31232.
+L1:
+    dec.w R15           ; Decrement R15
+    jnz L1              ; Jump if R15 is not zero (continue inner loop)
+    dec.w R14           ; Decrement R14
+    jnz L2              ; Jump if R14 is not zero (continue outer loop)
+    ret                 ; Return from subroutine
+
+; -----------------------------------------------------------------------------
+; INTERRUPT SERVICE ROUTINE (ISR for Port 2 - .int03)
+; Handles Pause/Unpause (1-4 presses) and Reset (5th press).
+; -----------------------------------------------------------------------------
+ISR:
+    dint                                    ; Disable interrupts (Prevent nesting)
+    
+    inc.w   &PressCount                     ; PressCount++ (1, 2, 3, 4, 5)
+    
+    mov.w   &PressCount, R8
+    cmp.w   #5, R8                          ; Check if it is the 5th press
+    
+    jeq     ISR_Reset                       ; Yes, jump to reset logic
+    
+; --- Logic for Presses 1, 2, 3, 4: Toggle PausedFlag ---
+    mov.w   &PausedFlag, R8
+    xor.w   #1, R8                          ; Toggle 0 <-> 1
+    mov.w   R8, &PausedFlag
+    jmp     ISR_End
+    
+ISR_Reset:
+    clr.w   &PressCount                     ; Reset press counter to 0 (Next press will be 1)
+    clr.w   R5                              ; Reset sequence index (R5 = 0, starts from '0')
+    clr.w   &PausedFlag                     ; Ensure it is unpaused after reset
+    
+ISR_End:
+    clr     &P2IFG                          ; Clear the P2 Interrupt Flag (mandatory)
+    eint                                    ; Enable interrupts
+    reti                                    ; Return from interrupt
+
+; --- Data Section ---
+            .data                           ; Start of data section
+; State Variables for Part 4
+PressCount: .word 0                         ; Tracks presses 1-5
+PausedFlag: .word 0                         ; 0 = Running, 1 = Paused
+
+; Array 1: 0-9 Digit Patterns (10 bytes) - REQUIRED FOR PART 4
+arr_0_9:
+    .byte 00111111b, 00000110b, 01011011b, 01001111b, 01100110b, 01101101b
+    .byte 01111100b, 00000111b, 01111111b, 01100111b
+    
+; Placeholder for other arrays (not strictly needed for Part 4 logic but left empty for completeness)
+arr_ACHILLEUS: .byte 0
+
+; --- Interrupt Vectors ---
+            .sect   ".reset"                ; Reset Vector
+            .short  _start
+            
+            .sect   ".int03"                ; Port 2 Interrupt Vector (Address 04h)
+            .short  ISR                     ; Point to the ISR subroutine

@@ -1,0 +1,50 @@
+
+    bis.b   #0FFh, &P1DIR                   ; Set all P1 pins as output
+    bic.b   #0FFh, &P1OUT                   ; Clear all P1OUT (start with segments OFF)
+
+    bis.b   #0Fh, &P2DIR                    ; Set P2.0-P2.3 as output
+    bis.b   #0Fh, &P2OUT                    ; Set P2.0-P2.3 to 1 (disables all 4 displays if Common Anode)
+
+    mov.w   #0, R5                          ; R5: Counter variable (0-9)
+    mov.w   #arr, R6                        ; R6: Pointer to the start of the 'arr' data array
+
+MainLoop:
+    mov.b   @R6, R7                         ; R7 holds the 7-segment pattern. R6 currently points to arr[R5]
+
+    mov.b   R7, &P1OUT                      ; Display the pattern on the segments (A-H)
+
+    bic.b   #01h, &P2OUT                    ; Set P2.0 to 0 (Enable D0)
+    bis.b   #0Eh, &P2OUT                    ; Ensure P2.1, P2.2, P2.3 are 1 (Disable D1, D2, D3)
+
+    call    #Delay
+
+    bis.b   #01h, &P2OUT                    ; Set P2.0 back to 1 (Disable D0)
+    bic.b   #0FFh, &P1OUT                   ; Clear P1OUT (segments off)
+
+    inc.w   R5                              ; R5++ (next digit 0, 1, 2...)
+    inc.w   R6                              ; R6++ (next address in array)
+
+    cmp.w   #10, R5                         ; Compare R5 with 10
+    jne     MainLoop                        ; If not 10, repeat loop for next digit
+
+    clr.w   R5                              ; R5 = 0
+    mov.w   #arr, R6                        ; R6 = address of arr[0]
+    jmp     MainLoop                        ; Restart the MainLoop
+
+; --- Data Section ---
+            .data                           ; Start of data section
+arr:
+; Provided 7-segment bit patterns for 0-9
+; HGFEDCBA. Note: H is the decimal point.
+; 0: 00111111b (0x3F)
+; 1: 00000110b (0x06)
+; 2: 01011011b (0x5B)
+; 3: 01001111b (0x4F)
+; 4: 01100110b (0x66)
+; 5: 01101101b (0x6D)
+; 6: 01111100b (0x7C) - Note: Experiment file lists 01111100b, likely a mistake if H=0
+; 7: 00000111b (0x07)
+; 8: 01111111b (0x7F)
+; 9: 01100111b (0x67)
+    .byte 00111111b, 00000110b, 01011011b, 01001111b, 01100110b, 01101101b
+    .byte 01111100b, 00000111b, 01111111b, 01100111b

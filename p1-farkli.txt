@@ -1,0 +1,94 @@
+; -----------------------------------------------------------------------------
+; MSP430 Assembly - Experiment 4, Part 1: 0-9 Counter (Consolidated)
+; Counts from 0 to 9 repeatedly, displaying each digit for ~1 second on display D0.
+; The Delay subroutine is defined within this file.
+; Uses P1.0-P1.7 for segment data and P2.0-P2.3 for display selection (D0 enable).
+; Assumes a COMMON ANODE display setup (0 = ON, 1 = OFF).
+; -----------------------------------------------------------------------------
+
+            .text                           ; Start of program code
+            .global _start
+_start:
+; --- Stack and Watchdog Initialization ---
+    mov.w   #0280h, SP                      ; Initialize Stack Pointer
+    mov.w   #WDTPW|WDTHOLD, &WDTCTL         ; Stop watchdog timer
+
+; --- Port Initialization ---
+; P1.0-P1.7: Segment Data (Output)
+    bis.b   #0FFh, &P1DIR                   ; Set all P1 pins as output
+    bic.b   #0FFh, &P1OUT                   ; Clear all P1OUT (start with segments OFF)
+
+; P2.0-P2.3: Display Enable/Selection (Output)
+    bis.b   #0Fh, &P2DIR                    ; Set P2.0-P2.3 as output
+    bis.b   #0Fh, &P2OUT                    ; Set P2.0-P2.3 to 1 (disables all 4 displays if Common Anode)
+    
+; --- Setup Counter Registers ---
+    mov.w   #0, R5                          ; R5: Counter variable (0-9)
+    mov.w   #arr, R6                        ; R6: Pointer to the start of the 'arr' data array
+
+; --- Main Program Loop ---
+MainLoop:
+; 1. Load the 7-Segment pattern for the current counter value (R5)
+    mov.b   @R6, R7                         ; R7 holds the 7-segment pattern. R6 currently points to arr[R5]
+
+; 2. Output the pattern to P1OUT (P1.0-P1.7)
+    mov.b   R7, &P1OUT                      ; Display the pattern on the segments (A-H)
+
+; 3. Select the 7-Segment Display (Use D0 - the least significant digit, P2.0)
+; We want P2.0 to be 0 (ON) and P2.1-P2.3 to be 1 (OFF).
+    bic.b   #01h, &P2OUT                    ; Set P2.0 to 0 (Enable D0)
+    bis.b   #0Eh, &P2OUT                    ; Ensure P2.1, P2.2, P2.3 are 1 (Disable D1, D2, D3)
+
+; 4. Call the Delay Subroutine (1 second display time)
+    call    #Delay
+
+; 5. Disable the Display and Clear Segments after delay
+    bis.b   #01h, &P2OUT                    ; Set P2.0 back to 1 (Disable D0)
+    bic.b   #0FFh, &P1OUT                   ; Clear P1OUT (segments off)
+
+; 6. Increment and Loop the Counter
+    inc.w   R5                              ; R5++ (next digit 0, 1, 2...)
+    inc.w   R6                              ; R6++ (next address in array)
+    
+; Check if R5 reached 10 (the end of the array)
+    cmp.w   #10, R5                         ; Compare R5 with 10
+    jne     MainLoop                        ; If not 10, repeat loop for next digit
+
+; If R5 is 10, Reset R5 and R6 to start over (0)
+    clr.w   R5                              ; R5 = 0
+    mov.w   #arr, R6                        ; R6 = address of arr[0]
+    jmp     MainLoop                        ; Restart the MainLoop
+
+; -----------------------------------------------------------------------------
+; DELAY SUBROUTINE (Provided in Experiment 4 document, Part 1)
+; R14 and R15 are used as loop counters.
+; -----------------------------------------------------------------------------
+Delay:
+    ; NOTE: For a proper subroutine, R14 and R15 should be PUSHed here if they
+    ; contain useful data that needs preservation.
+    mov.w #0Ah, R14     ; Initialize Outer loop counter (R14) to 10.
+L2:
+    mov.w #07A00h, R15  ; Initialize Inner loop counter (R15) to 31232.
+L1:
+    dec.w R15           ; Decrement R15
+    jnz L1              ; Jump if R15 is not zero (continue inner loop)
+    dec.w R14           ; Decrement R14
+    jnz L2              ; Jump if R14 is not zero (continue outer loop)
+    ; NOTE: R14 and R15 should be POPped here.
+    ret                 ; Return from subroutine
+
+
+; --- Data Section ---
+            .data                           ; Start of data section
+arr:
+; Provided 7-segment bit patterns for 0-9 (10 bytes)
+; HGFEDCBA.
+; 0: 00111111b, 1: 00000110b, 2: 01011011b, 3: 01001111b, 4: 01100110b
+; 5: 01101101b, 6: 01111100b, 7: 00000111b, 8: 01111111b, 9: 01100111b
+    .byte 00111111b, 00000110b, 01011011b, 01001111b, 01100110b, 01101101b
+    .byte 01111100b, 00000111b, 01111111b, 01100111b
+
+; --- Interrupt Vectors ---
+; The experiment template requires the reset vector at the end.
+            .sect   ".reset"
+            .short  _start
