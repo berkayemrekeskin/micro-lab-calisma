@@ -1,7 +1,7 @@
 ; -----------------------------------------------------------------------------
-; MSP430 Assembly - Experiment 4, Part 4: INTERRUPTS - PAUSE/RESET
-; Displays 0-9 repeatedly. P2.6 button toggles Pause/Unpause (1-4 presses)
-; and Resets the counter to 0 (5th press).
+; MSP430 Assembly - Experiment 4, Part 3: INTERRUPTS - MODE SWITCHING
+; Switches between three sequences (0-9, ACHILLEUS, Interleaved) using a P2.6 interrupt.
+; The program is always displaying on D0 using multiplexing/delay.
 ; Uses P1.0-P1.7 for segment data and P2.0-P2.3 for display selection (D0 enable).
 ; Assumes a COMMON ANODE display setup (0 = ON, 1 = OFF).
 ; -----------------------------------------------------------------------------
@@ -30,50 +30,124 @@ _start:
     clr     &P2IFG                          ; clear the flag
     eint                                    ; enable global interrupts
 
-; --- Setup Counter Registers and Initial Data Pointer ---
-    mov.w   #0, R5                          ; R5: Counter variable (index 0-9)
-    mov.w   #arr_0_9, R6                    ; R6: Pointer to the start of the 0-9 data array
+; --- Setup Mode and Counter Registers ---
+    mov.w   #1, &Mode                       ; Initialize Mode variable to 1 (start with 0-9 count)
+    mov.w   #0, R5                          ; R5: Counter variable (index)
+
+; --- Main Program Mode Dispatcher ---
+SwitchMode:
+    clr.w   R5                              ; R5 = 0 (Reset index for new mode)
+    mov.w   &Mode, R8                       ; Load current mode into R8 (temporary)
     
-; --- Main Program Loop ---
-MainLoop:
-; 1. Load the 7-Segment pattern
+    ; Check which mode we are in (1, 2, or 3)
+    cmp.w   #1, R8                          ; Is it Mode 1?
+    jeq     Loop_Mode1                      ; Yes: 0-9 Count
+    cmp.w   #2, R8                          ; Is it Mode 2?
+    jeq     Loop_Mode2                      ; Yes: ACHILLEUS Sequence
+    jmp     Loop_Mode3                      ; Otherwise, must be Mode 3: Interleaved
+
+; -----------------------------------------------------------------------------
+; MODE 1: 0-9 Counting (Length = 10)
+; -----------------------------------------------------------------------------
+Loop_Mode1:
+    mov.w   #arr_0_9, R6                    ; R6: Pointer to the start of the 0-9 data array
     mov.w   R5, R9                          ; R9 = Index R5
-    add.w   R9, R6                          ; R6 = arr_0_9 + R5 (Ensure R6 is correctly indexed before display)
-    mov.b   @R6, R7                         ; R7 holds the 7-segment pattern.
+    add.w   R9, R6                          ; R6 = arr_0_9 + R5 (Index the pointer)
+    
+    mov.b   @R6, R7                         ; Load pattern (R7)
+    jmp     Display_Sequence                ; Go display it
 
-; 2. Output the pattern and enable D0
-    mov.b   R7, &P1OUT                      ; Display the pattern on the segments
-    bic.b   #01h, &P2OUT                    ; Enable D0 (P2.0 = 0)
-    bis.b   #0Eh, &P2OUT                    ; Disable D1, D2, D3
+; Check and Loop
+Check_Loop1:
+    inc.w   R5                              ; R5++ (next index)
+    cmp.w   #10, R5                         ; Check if R5 reached 10 (end of 0-9)
+    jne     Loop_Mode1                      ; If not 10, repeat Mode 1 loop
+    jmp     SwitchMode                      ; Reset R5 and jump back to mode dispatcher
 
-; 3. Call the Delay Subroutine (1 second display time)
+; -----------------------------------------------------------------------------
+; MODE 2: ACHILLEUS Sequence (Length = 9)
+; -----------------------------------------------------------------------------
+Loop_Mode2:
+    mov.w   #arr_ACHILLEUS, R6              ; R6: Pointer to the start of ACHILLEUS data array
+    mov.w   R5, R9                          ; R9 = Index R5
+    add.w   R9, R6                          ; R6 = arr_ACHILLEUS + R5 (Index the pointer)
+    
+    mov.b   @R6, R7                         ; Load pattern (R7)
+    jmp     Display_Sequence                ; Go display it
+
+; Check and Loop
+Check_Loop2:
+    inc.w   R5                              ; R5++ (next index)
+    cmp.w   #9, R5                          ; Check if R5 reached 9 (end of ACHILLEUS)
+    jne     Loop_Mode2                      ; If not 9, repeat Mode 2 loop
+    jmp     SwitchMode                      ; Reset R5 and jump back to mode dispatcher
+
+; -----------------------------------------------------------------------------
+; MODE 3: Interleaved Sequence (1-A-2-C-3-H-4-I-5-L-6-L-7-E-8-U-9-S) (Length = 18)
+; -----------------------------------------------------------------------------
+Loop_Mode3:
+    mov.w   R5, R9                          ; R9 = Index R5
+    
+    ; Determine if R5 is even (digit from arr_0_9) or odd (letter from arr_ACHILLEUS)
+    and.w   #1, R9                          ; R9 is now 0 (even) or 1 (odd)
+    cmp.w   #0, R9                          ; Check if R9 is 0 (even)
+    jeq     Interleave_Digit                ; If even, jump to get the digit
+    
+    ; R5 is ODD (Letter) -> Get letter index (R5 / 2) from arr_ACHILLEUS
+    ; Preserve R5 before shift
+    push.w  R5                              ; Save R5 (original index)
+    rra.w   R5                              ; R5 = R5 / 2 (right shift R5)
+    mov.w   #arr_ACHILLEUS, R6              ; R6: Pointer to the letter array
+    add.w   R5, R6                          ; R6 = arr_ACHILLEUS + (R5/2)
+    pop.w   R5                              ; Restore R5 (original index)
+    jmp     Load_Pattern_M3                 ; Load pattern
+
+Interleave_Digit:
+    ; R5 is EVEN (Digit) -> Get digit index (R5 / 2) from arr_0_9
+    ; Preserve R5 before shift
+    push.w  R5                              ; Save R5 (original index)
+    rra.w   R5                              ; R5 = R5 / 2 (right shift R5)
+    mov.w   #arr_0_9, R6                    ; R6: Pointer to the digit array
+    add.w   R5, R6                          ; R6 = arr_0_9 + (R5/2)
+    pop.w   R5                              ; Restore R5 (original index)
+
+Load_Pattern_M3:
+    mov.b   @R6, R7                         ; Load pattern (R7)
+    jmp     Display_Sequence                ; Go display it
+
+; Check and Loop
+Check_Loop3:
+    inc.w   R5                              ; R5++ (next index)
+    cmp.w   #18, R5                         ; Check if R5 reached 18 (end of 18-character sequence)
+    jne     Loop_Mode3                      ; If not 18, repeat Mode 3 loop
+    jmp     SwitchMode                      ; Reset R5 and jump back to mode dispatcher
+
+; -----------------------------------------------------------------------------
+; COMMON DISPLAY LOGIC (Used by all three modes)
+; -----------------------------------------------------------------------------
+Display_Sequence:
+    ; 1. Output the pattern to P1OUT (P1.0-P1.7)
+    mov.b   R7, &P1OUT                      ; Display the pattern on the segments (A-H)
+
+    ; 2. Select the 7-Segment Display D0
+    bic.b   #01h, &P2OUT                    ; Set P2.0 to 0 (Enable D0)
+    bis.b   #0Eh, &P2OUT                    ; Ensure P2.1, P2.2, P2.3 are 1 (Disable D1, D2, D3)
+
+    ; 3. Call the Delay Subroutine (1 second display time)
     call    #Delay
 
-; 4. Disable the Display and Clear Segments after delay
-    bis.b   #01h, &P2OUT                    ; Disable D0 (P2.0 = 1)
+    ; 4. Disable the Display and Clear Segments after delay
+    bis.b   #01h, &P2OUT                    ; Set P2.0 back to 1 (Disable D0)
     bic.b   #0FFh, &P1OUT                   ; Clear P1OUT (segments off)
-
-; 5. Check Paused Flag and conditionally increment counter
-    mov.w   &PausedFlag, R8
-    cmp.w   #1, R8                          ; Check if PausedFlag == 1
-    jeq     Check_Loop                      ; If paused, skip increment
     
-; Increment if running
-    inc.w   R5                              ; R5++ (next digit index)
-    ; NOTE: R6 pointer is calculated dynamically at the start of the loop (R6 = arr_0_9 + R5), 
-    ; so we only need to increment R5. We will leave the redundant inc.w R6 for completeness
-    ; based on Part 1/2 logic, but it's not strictly needed here since R6 is reset above.
-    ; For robust code, we skip R6 increment and recalculate R6 in the loop start.
-
-Check_Loop:
-; Check if R5 reached 10 (the end of the 0-9 sequence)
-    cmp.w   #10, R5                         ; Compare R5 with 10
-    jne     MainLoop                        ; If not 10, repeat loop
+    ; Return to the correct mode's loop check
+    mov.w   &Mode, R8                       ; Check which mode we are returning to
+    cmp.w   #1, R8
+    jeq     Check_Loop1
+    cmp.w   #2, R8
+    jeq     Check_Loop2
+    jmp     Check_Loop3
     
-; If 10, Reset R5 to start over (0)
-    clr.w   R5                              ; R5 = 0
-    jmp     MainLoop                        ; Restart the MainLoop
-
 ; -----------------------------------------------------------------------------
 ; DELAY SUBROUTINE (Unchanged)
 ; -----------------------------------------------------------------------------
@@ -90,47 +164,44 @@ L1:
 
 ; -----------------------------------------------------------------------------
 ; INTERRUPT SERVICE ROUTINE (ISR for Port 2 - .int03)
-; Handles Pause/Unpause (1-4 presses) and Reset (5th press).
 ; -----------------------------------------------------------------------------
 ISR:
+    ; PUSH any registers used here (R8 for example) to the stack if needed
     dint                                    ; Disable interrupts (Prevent nesting)
     
-    inc.w   &PressCount                     ; PressCount++ (1, 2, 3, 4, 5)
+    inc.w   &Mode                           ; Mode++
     
-    mov.w   &PressCount, R8
-    cmp.w   #5, R8                          ; Check if it is the 5th press
+    mov.w   &Mode, R8                       ; Load current Mode
+    cmp.w   #4, R8                          ; Check if Mode > 3
+    jne     ISR_EndCheck
+    mov.w   #1, &Mode                       ; If Mode = 4, wrap around to Mode 1
+
+ISR_EndCheck:
+    ; Since the main loops are checking the Mode variable at the top of the loop,
+    ; no immediate jump is needed here. The loop will naturally switch mode
+    ; once it finishes its current sequence.
     
-    jeq     ISR_Reset                       ; Yes, jump to reset logic
+    ; The original instruction didn't include the jmp SwitchMode, so we rely on the
+    ; loop finishing or simply returning and the next iteration catching the new mode.
     
-; --- Logic for Presses 1, 2, 3, 4: Toggle PausedFlag ---
-    mov.w   &PausedFlag, R8
-    xor.w   #1, R8                          ; Toggle 0 <-> 1
-    mov.w   R8, &PausedFlag
-    jmp     ISR_End
-    
-ISR_Reset:
-    clr.w   &PressCount                     ; Reset press counter to 0 (Next press will be 1)
-    clr.w   R5                              ; Reset sequence index (R5 = 0, starts from '0')
-    clr.w   &PausedFlag                     ; Ensure it is unpaused after reset
-    
-ISR_End:
     clr     &P2IFG                          ; Clear the P2 Interrupt Flag (mandatory)
     eint                                    ; Enable interrupts
     reti                                    ; Return from interrupt
 
 ; --- Data Section ---
             .data                           ; Start of data section
-; State Variables for Part 4
-PressCount: .word 0                         ; Tracks presses 1-5
-PausedFlag: .word 0                         ; 0 = Running, 1 = Paused
+; State Variable for Part 3
+Mode:       .word 1                         ; Default start mode is 1
 
-; Array 1: 0-9 Digit Patterns (10 bytes) - REQUIRED FOR PART 4
+; Array 1: 0-9 Digit Patterns (10 bytes)
 arr_0_9:
     .byte 00111111b, 00000110b, 01011011b, 01001111b, 01100110b, 01101101b
     .byte 01111100b, 00000111b, 01111111b, 01100111b
-    
-; Placeholder for other arrays (not strictly needed for Part 4 logic but left empty for completeness)
-arr_ACHILLEUS: .byte 0
+
+; Array 2: ACHILLEUS Letter Patterns (9 bytes)
+arr_ACHILLEUS:
+    .byte 01110111b, 00111001b, 01110110b, 00000110b, 00111000b, 00111000b
+    .byte 01111001b, 00111110b, 01101101b
 
 ; --- Interrupt Vectors ---
             .sect   ".reset"                ; Reset Vector
